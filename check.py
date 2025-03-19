@@ -18,14 +18,12 @@ def calculate_iou(box1, box2):
     x1_1, y1_1, x2_1, y2_1 = box1
     x1_2, y1_2, x2_2, y2_2 = box2
 
-    # Intersection area
     xi1 = max(x1_1, x1_2)
     yi1 = max(y1_1, y1_2)
     xi2 = min(x2_1, x2_2)
     yi2 = min(y2_1, y2_2)
     intersection = max(0, xi2 - xi1) * max(0, yi2 - yi1)
 
-    # Union area
     area1 = (x2_1 - x1_1) * (y2_1 - y1_1)
     area2 = (x2_2 - x1_2) * (y2_2 - y1_2)
     union = area1 + area2 - intersection
@@ -48,10 +46,14 @@ class OCRTracker:
         
         # Tracking state and data storage
         self.id_to_ocr = {}
+        self.ocr_to_id = {}  # Maps OCR text to a unique display ID
+        self.next_ocr_id = 1  # Next available ID for new OCR texts
         self.frame_count = 0
         self.start_time = time.time()
         self.tracking_data = []
+        self.all_tracking_data = []  # Store all detections including frame information
         self.results_df = None
+        self.all_results_df = None  # New dataframe for all detections
 
     def perform_ocr(self, cropped_image):
         """Perform OCR on a cropped license plate image"""
@@ -127,8 +129,16 @@ class OCRTracker:
             x1, y1, x2, y2, track_id = map(int, obj)
             ocr_text = self.id_to_ocr.get(track_id, "Unknown")
 
+            # Get or assign display ID based on OCR text
+            if ocr_text in self.ocr_to_id:
+                display_id = self.ocr_to_id[ocr_text]
+            else:
+                display_id = self.next_ocr_id
+                self.ocr_to_id[ocr_text] = display_id
+                self.next_ocr_id += 1
+
             # Create combined display text
-            display_text = f"ID {track_id}: {ocr_text}"
+            display_text = f"ID {display_id}: {ocr_text}"
 
             # Draw bounding box
             cv2.rectangle(annotated_frame, (x1, y1), (x2, y2), (0, 255, 0), 2)
@@ -182,21 +192,35 @@ class OCRTracker:
 
             # Collect tracking data
             current_time = self.frame_count / fps
+            frame_number = self.frame_count
+            
             for obj in tracked_objects:
                 x1, y1, x2, y2, track_id = map(int, obj)
+                ocr_text = self.id_to_ocr.get(track_id, "Unknown")
+                display_id = self.ocr_to_id.get(ocr_text, track_id)
 
-                # Avoid duplicate entries
-           # Check if the OCR text already exists in self.tracking_data
-            existing_ocr_texts = {entry['ocr_text'] for entry in self.tracking_data}
-
-            ocr_text = self.id_to_ocr.get(track_id, "Unknown")
-            if ocr_text not in existing_ocr_texts:
                 self.tracking_data.append({
-                    'track_id': track_id,
-                    'ocr_text': ocr_text
+                    'display_id': display_id,
+                    'ocr_text': ocr_text,
+                    'timestamp': current_time,
+                    'x1': x1,
+                    'y1': y1,
+                    'x2': x2,
+                    'y2': y2
                 })
-
-
+                
+                # Add to all_tracking_data with additional frame information
+                self.all_tracking_data.append({
+                    'display_id': display_id,
+                    'track_id': track_id,
+                    'ocr_text': ocr_text,
+                    'frame_number': frame_number,
+                    'timestamp': current_time,
+                    'x1': x1,
+                    'y1': y1,
+                    'x2': x2,
+                    'y2': y2
+                })
 
             # Progress reporting
             self.frame_count += 1
@@ -208,8 +232,9 @@ class OCRTracker:
                       f"Elapsed: {elapsed:.1f}s | "
                       f"Remaining: {remaining:.1f}s")
 
-        # Create dataframe
+        # Create dataframes
         self.results_df = pd.DataFrame(self.tracking_data)
+        self.all_results_df = pd.DataFrame(self.all_tracking_data)
         
         # Cleanup
         cap.release()
@@ -226,18 +251,31 @@ def main():
     tracker = OCRTracker()
     tracker.process_video("test_video.mp4", "output.mp4")
     
-    # Save and display results
+    # Save and display summarized results
     if tracker.results_df is not None and not tracker.results_df.empty:
-        most_frequent_row = (
-            tracker.results_df.value_counts().idxmax()
-        )
-        tracker.results_df = pd.DataFrame([most_frequent_row], columns=tracker.results_df.columns)
+        # Get most frequent entry per display_id
+        tracker.results_df = tracker.results_df.groupby('display_id').agg({
+            'ocr_text': lambda x: x.mode()[0],
+            'timestamp': 'count'  # Count occurrences
+        }).rename(columns={'timestamp': 'count'}).sort_values('count', ascending=False)
+        tracker.results_df = tracker.results_df.reset_index()[['display_id', 'ocr_text']]
         tracker.results_df.to_csv('tracking_results.csv', index=False)
         
         print("\nTracking results summary:")
         print(tracker.results_df)
         print(f"\nSaved results to tracking_results.csv")
-
+    
+    # Save and display all tracking results
+    if tracker.all_results_df is not None and not tracker.all_results_df.empty:
+        # Save all tracking results to CSV
+        tracker.all_results_df.to_csv('all_tracking_results.csv', index=False)
+        
+        # Create a version with just the IDs and OCR texts
+        all_tracking_summary = tracker.all_results_df[['display_id', 'track_id', 'ocr_text', 'frame_number', 'timestamp']]
+        print("\nAll tracking results sample (first 5 rows):")
+        print(all_tracking_summary.head())
+        print(f"\nTotal detections: {len(tracker.all_results_df)}")
+        print(f"\nSaved all results to all_tracking_results.csv")
 
 if __name__ == "__main__":
     main()
