@@ -186,11 +186,16 @@ class OCRTracker:
                 x1, y1, x2, y2, track_id = map(int, obj)
 
                 # Avoid duplicate entries
-            if {'track_id': track_id, 'ocr_text': self.id_to_ocr.get(track_id, "Unknown")} not in self.tracking_data:
-                    self.tracking_data.append({
-                        'track_id': track_id,
-                        'ocr_text': self.id_to_ocr.get(track_id, "Unknown")
-                    })
+           # Check if the OCR text already exists in self.tracking_data
+            existing_ocr_texts = {entry['ocr_text'] for entry in self.tracking_data}
+
+            ocr_text = self.id_to_ocr.get(track_id, "Unknown")
+            if ocr_text not in existing_ocr_texts:
+                self.tracking_data.append({
+                    'track_id': track_id,
+                    'ocr_text': ocr_text
+                })
+
 
 
             # Progress reporting
